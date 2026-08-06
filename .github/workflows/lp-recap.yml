@@ -1,0 +1,65 @@
+name: LP recap
+
+on:
+  schedule:
+    # Toutes les 5 min : lit les commandes `!lp ...` et publie le récap quand
+    # l'heure est passée. Repo public = minutes Actions illimitées.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      force_recap:
+        description: "Republier le récap même s'il a déjà été posté aujourd'hui"
+        type: boolean
+        default: false
+
+# Le job commit data/ : deux exécutions simultanées se marcheraient dessus.
+concurrency:
+  group: lp-recap
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # pour committer data/players.json et data/state.json
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Commandes + récap
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          RECAP_CHANNEL_ID: ${{ secrets.RECAP_CHANNEL_ID }}
+          COMMAND_CHANNEL_ID: ${{ secrets.COMMAND_CHANNEL_ID }}
+          RECAP_HOUR: ${{ vars.RECAP_HOUR || '9' }}
+          TIMEZONE: ${{ vars.TIMEZONE || 'Europe/Paris' }}
+          INCLUDE_FLEX: ${{ vars.INCLUDE_FLEX || '0' }}
+          UGG_SEASON_ID: ${{ vars.UGG_SEASON_ID || '26' }}
+        run: |
+          if [ "${{ inputs.force_recap }}" = "true" ]; then
+            python src/run_once.py --force-recap
+          else
+            python src/run_once.py
+          fi
+
+      - name: Persister l'état
+        run: |
+          if ! git diff --quiet data/; then
+            git config user.name "lp-recap-bot"
+            git config user.email "bot@users.noreply.github.com"
+            git add data/
+            git commit -m "chore: maj profils/état [skip ci]"
+            # Le cron tourne toutes les 5 min : un autre job a pu pousser entre
+            # temps. On rebase et on retente plutôt que d'échouer.
+            for attempt in 1 2 3; do
+              git pull --rebase --autostash && git push && break
+              sleep 5
+            done
+          fi

@@ -1,0 +1,5 @@
+discord.py>=2.4,<3
+# curl_cffi (et pas requests/aiohttp) : u.gg est derrière Cloudflare, qui
+# vérifie le fingerprint TLS. curl_cffi rejoue le handshake de Chrome.
+curl_cffi>=0.7
+python-dotenv>=1.0
