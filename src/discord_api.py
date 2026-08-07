@@ -75,16 +75,23 @@ class DiscordClient:
         raise DiscordError(f"{method} {path} : abandon après {MAX_RETRIES} tentatives")
 
     def get_messages(
-        self, channel_id: int, after: int | None = None, limit: int = 100
+        self,
+        channel_id: int,
+        after: int | None = None,
+        before: int | None = None,
+        limit: int = 100,
     ) -> list[dict]:
         """Messages du salon, du plus ancien au plus récent.
 
-        `after` est un ID de message (snowflake) : Discord ne renvoie que ce qui
-        est postérieur. C'est ce qui évite de retraiter d'anciennes commandes.
+        `after` : ID de message (snowflake) ; Discord ne renvoie que ce qui est
+        postérieur. C'est ce qui évite de retraiter d'anciennes commandes.
+        `before` : l'inverse, pour remonter l'historique page par page.
         """
         params = {"limit": str(min(limit, 100))}
         if after:
             params["after"] = str(after)
+        if before:
+            params["before"] = str(before)
         messages = self._request("GET", f"/channels/{channel_id}/messages", params=params)
         # L'API renvoie du plus récent au plus ancien : on remet dans l'ordre.
         return list(reversed(messages or []))

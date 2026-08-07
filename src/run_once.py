@@ -15,6 +15,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time as _time
 from datetime import datetime, timedelta
@@ -277,6 +278,74 @@ def process_commands(
         )
 
 
+# ──────────────────────── moissonnage de l'historique ────────────────────────
+
+# Les embeds DPM.LOL portent le Riot ID complet dans `author.name`
+# (ex. « MY NAME IS TITUS#NBO »). C'est plus fiable que de parser l'URL
+# dpm.lol, où le séparateur `-` est ambigu quand le pseudo en contient un.
+_RIOT_ID_RE = re.compile(r"^\s*(?P<name>.+?)\s*#\s*(?P<tag>[A-Za-z0-9]{2,8})\s*$")
+
+
+def harvest_riot_ids(discord: DiscordClient, channel_id: int, max_pages: int) -> dict:
+    """Remonte tout l'historique du salon et collecte les Riot ID distincts."""
+    found: dict[str, tuple[str, str]] = {}
+    before = None
+    scanned = 0
+
+    for page in range(max_pages):
+        batch = discord.get_messages(channel_id, before=before, limit=100)
+        if not batch:
+            break
+        scanned += len(batch)
+        for message in batch:
+            for embed in message.get("embeds") or []:
+                raw = ((embed.get("author") or {}).get("name") or "").strip()
+                match = _RIOT_ID_RE.match(raw)
+                if not match:
+                    continue
+                name, tag = match.group("name"), match.group("tag")
+                found.setdefault(f"{name.lower()}#{tag.lower()}", (name, tag))
+        before = batch[0]["id"]  # batch est trié du plus ancien au plus récent
+        log.info("page %d : %d messages scannés, %d Riot ID distincts",
+                 page + 1, scanned, len(found))
+
+    log.info("moissonnage terminé : %d messages, %d Riot ID", scanned, len(found))
+    return found
+
+
+def run_harvest(store: PlayerStore, ugg: UggClient, discord: DiscordClient,
+                channel_id: int, max_pages: int, region: str) -> int:
+    found = harvest_riot_ids(discord, channel_id, max_pages)
+    if not found:
+        log.error("aucun Riot ID trouvé — le salon est-il le bon ?")
+        return 1
+
+    added, already, rejected = [], [], []
+    for index, (name, tag) in enumerate(sorted(found.values())):
+        if store.find(f"{name}#{tag}"):
+            already.append(f"{name}#{tag}")
+            continue
+        if index:
+            _time.sleep(DELAY_BETWEEN_PLAYERS)
+        try:
+            ugg.fetch_ranks(name, tag, region)
+        except PlayerNotFound:
+            rejected.append(f"{name}#{tag} (introuvable en {region_label(region)})")
+            continue
+        except UggError as exc:
+            rejected.append(f"{name}#{tag} ({exc})")
+            continue
+        store.add_sync(Player(name=name, tag=tag, region=region))
+        added.append(f"{name}#{tag}")
+
+    print("\n=== MOISSONNAGE ===")
+    print(f"ajoutés   ({len(added)}) : " + (", ".join(added) or "—"))
+    print(f"déjà là   ({len(already)}) : " + (", ".join(already) or "—"))
+    print(f"rejetés   ({len(rejected)}) : " + ("; ".join(rejected) or "—"))
+    print(f"total suivi : {len(store.all())}")
+    return 0
+
+
 # ─────────────────────────────── récap quotidien ───────────────────────────────
 
 def maybe_post_recap(
@@ -314,6 +383,11 @@ def main() -> int:
                         help="ignorer les commandes, ne faire que le récap")
     parser.add_argument("--dry-run", action="store_true",
                         help="afficher le récap dans la console sans rien envoyer")
+    parser.add_argument("--harvest", action="store_true",
+                        help="remonter l'historique du salon et ajouter tous les "
+                             "Riot ID trouvés dans les embeds")
+    parser.add_argument("--harvest-pages", type=int, default=60,
+                        help="pages de 100 messages à remonter (défaut : 60)")
     args = parser.parse_args()
 
     missing = [n for n, v in (("DISCORD_TOKEN", TOKEN),
@@ -341,6 +415,10 @@ def main() -> int:
 
     state = load_state()
     discord = DiscordClient(TOKEN)
+
+    if args.harvest:
+        source = COMMAND_CHANNEL_ID or RECAP_CHANNEL_ID
+        return run_harvest(store, ugg, discord, source, args.harvest_pages, DEFAULT_REGION)
 
     try:
         if not args.no_commands:

@@ -11,6 +11,10 @@ on:
         description: "Republier le récap même s'il a déjà été posté aujourd'hui"
         type: boolean
         default: false
+      harvest:
+        description: "Moissonner l'historique du salon et ajouter tous les Riot ID trouvés"
+        type: boolean
+        default: false
 
 # Le job commit data/ : deux exécutions simultanées se marcheraient dessus.
 concurrency:
@@ -43,7 +47,9 @@ jobs:
           INCLUDE_FLEX: ${{ vars.INCLUDE_FLEX || '0' }}
           UGG_SEASON_ID: ${{ vars.UGG_SEASON_ID || '26' }}
         run: |
-          if [ "${{ inputs.force_recap }}" = "true" ]; then
+          if [ "${{ inputs.harvest }}" = "true" ]; then
+            python src/run_once.py --harvest
+          elif [ "${{ inputs.force_recap }}" = "true" ]; then
             python src/run_once.py --force-recap
           else
             python src/run_once.py
