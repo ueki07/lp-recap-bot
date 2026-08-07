@@ -15,6 +15,10 @@ on:
         description: "Moissonner l'historique du salon et ajouter tous les Riot ID trouvés"
         type: boolean
         default: false
+      harvest_pages:
+        description: "Pages de 100 messages à remonter lors du moissonnage"
+        type: string
+        default: "60"
 
 # Le job commit data/ : deux exécutions simultanées se marcheraient dessus.
 concurrency:
@@ -48,7 +52,7 @@ jobs:
           UGG_SEASON_ID: ${{ vars.UGG_SEASON_ID || '26' }}
         run: |
           if [ "${{ inputs.harvest }}" = "true" ]; then
-            python src/run_once.py --harvest
+            python src/run_once.py --harvest --harvest-pages "${{ inputs.harvest_pages || '60' }}"
           elif [ "${{ inputs.force_recap }}" = "true" ]; then
             python src/run_once.py --force-recap
           else
