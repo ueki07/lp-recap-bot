@@ -51,10 +51,14 @@ jobs:
 
       - name: Persister l'état
         run: |
-          if ! git diff --quiet data/; then
+          # `git add` AVANT le test : `git diff` ignore les fichiers non suivis,
+          # et data/state.json est créé au premier run. Sans ça, le curseur de
+          # commandes et last_recap ne sont jamais persistés — le récap serait
+          # republié à chaque tick du cron.
+          git add -A data/
+          if ! git diff --cached --quiet; then
             git config user.name "lp-recap-bot"
             git config user.email "bot@users.noreply.github.com"
-            git add data/
             git commit -m "chore: maj profils/état [skip ci]"
             # Le cron tourne toutes les 5 min : un autre job a pu pousser entre
             # temps. On rebase et on retente plutôt que d'échouer.
