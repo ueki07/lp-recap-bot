@@ -19,7 +19,10 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
-from recap import PlayerRecap, build_embed, compute_recap, format_window, recap_window
+from recap import (
+    PlayerRecap, build_embed, build_player_embed, compute_player_period,
+    compute_recap, format_window, recap_window,
+)
 from store import (
     DEFAULT_REGION, REGIONS, Player, PlayerStore, parse_riot_id, region_label,
 )
@@ -62,7 +65,9 @@ tree = app_commands.CommandTree(bot)
 
 # ─────────────────────────── calcul (hors event loop) ───────────────────────────
 
-def _compute_all(players: list[Player], start: datetime, end: datetime) -> list[PlayerRecap]:
+def _compute_all(
+    players: list[Player], start: datetime, end: datetime, queues: list[int]
+) -> list[PlayerRecap]:
     """Boucle sur tous les joueurs. Bloquant : exécuté dans un thread.
 
     Un seul thread pour tout le monde : `curl_cffi.Session` n'est pas garanti
@@ -73,11 +78,14 @@ def _compute_all(players: list[Player], start: datetime, end: datetime) -> list[
     for index, player in enumerate(players):
         if index:
             _time.sleep(DELAY_BETWEEN_PLAYERS)
-        results.append(compute_recap(ugg, player, start, end, QUEUES, TZ))
+        results.append(compute_recap(ugg, player, start, end, queues, TZ))
     return results
 
 
-async def build_recap_embed(offset_days: int = 0) -> discord.Embed:
+async def build_recap_embed(
+    offset_days: int = 0, queues: list[int] | None = None
+) -> discord.Embed:
+    queues = queues or QUEUES
     now = datetime.now(TZ)
     start, end = recap_window(now, RECAP_HOUR, TZ)
     if offset_days:
@@ -96,11 +104,12 @@ async def build_recap_embed(offset_days: int = 0) -> discord.Embed:
         )
         return embed
 
-    recaps = await asyncio.to_thread(_compute_all, players, start, end)
+    recaps = await asyncio.to_thread(_compute_all, players, start, end, queues)
     for entry in recaps:
         if entry.error:
             log.warning("récap KO pour %s : %s", entry.player.riot_id, entry.error)
-    return build_embed(recaps, start, end, show_queue_split=INCLUDE_FLEX)
+    # Détail par file dès que plusieurs files sont demandées.
+    return build_embed(recaps, start, end, show_queue_split=len(queues) > 1)
 
 
 # ────────────────────────────── slash commands ──────────────────────────────
@@ -237,19 +246,84 @@ async def lp_list(interaction: discord.Interaction) -> None:
     await interaction.followup.send(embed=embed)
 
 
+QUEUE_CHOICES = [
+    app_commands.Choice(name="SoloQ", value="solo"),
+    app_commands.Choice(name="Flex", value="flex"),
+    app_commands.Choice(name="SoloQ + Flex", value="both"),
+]
+
+
+def queues_from_choice(value: str | None) -> list[int]:
+    """`None` -> la config par défaut du bot (SoloQ, sauf INCLUDE_FLEX=1)."""
+    if value == "flex":
+        return [QUEUE_FLEX]
+    if value == "both":
+        return [QUEUE_SOLO, QUEUE_FLEX]
+    if value == "solo":
+        return [QUEUE_SOLO]
+    return QUEUES
+
+
 @lp.command(name="recap", description="Afficher le récap LP à la demande")
 @app_commands.describe(
-    jours="0 = dernière fenêtre close (défaut), 1 = celle d'avant, etc."
+    jours="0 = dernière fenêtre close (défaut), 1 = celle d'avant, etc.",
+    file="File à compter (SoloQ par défaut)",
 )
-async def lp_recap(interaction: discord.Interaction, jours: int = 0) -> None:
+@app_commands.choices(file=QUEUE_CHOICES)
+async def lp_recap(
+    interaction: discord.Interaction,
+    jours: int = 0,
+    file: app_commands.Choice[str] | None = None,
+) -> None:
     if not 0 <= jours <= 30:
         await interaction.response.send_message(
             "❌ `jours` doit être compris entre 0 et 30.", ephemeral=True
         )
         return
     await interaction.response.defer(thinking=True)
-    embed = await build_recap_embed(offset_days=jours)
+    queues = queues_from_choice(file.value if file else None)
+    embed = await build_recap_embed(offset_days=jours, queues=queues)
     await interaction.followup.send(embed=embed)
+
+
+@lp.command(name="joueur", description="Bilan d'un joueur sur une période")
+@app_commands.describe(
+    riot_id="Le joueur (autocomplétion sur les profils suivis)",
+    jours="Nombre de jours à couvrir (30 par défaut, 90 max)",
+    file="File à compter (SoloQ par défaut)",
+)
+@app_commands.autocomplete(riot_id=tracked_autocomplete)
+@app_commands.choices(file=QUEUE_CHOICES)
+async def lp_joueur(
+    interaction: discord.Interaction,
+    riot_id: str,
+    jours: int = 30,
+    file: app_commands.Choice[str] | None = None,
+) -> None:
+    if not 1 <= jours <= 90:
+        await interaction.response.send_message(
+            "❌ `jours` doit être compris entre 1 et 90.", ephemeral=True
+        )
+        return
+
+    # Un profil suivi d'abord ; sinon on accepte n'importe quel Riot ID.
+    player = store.find(riot_id.strip().lower())
+    if player is None:
+        try:
+            name, tag = parse_riot_id(riot_id)
+        except ValueError as exc:
+            await interaction.response.send_message(f"❌ {exc}", ephemeral=True)
+            return
+        player = Player(name=name, tag=tag, region=DEFAULT_REGION)
+
+    await interaction.response.defer(thinking=True)
+    queues = queues_from_choice(file.value if file else None)
+    report = await asyncio.to_thread(
+        compute_player_period, ugg, player, jours, queues, TZ, RECAP_HOUR
+    )
+    if report.error:
+        log.warning("fiche joueur KO pour %s : %s", player.riot_id, report.error)
+    await interaction.followup.send(embed=build_player_embed(report))
 
 
 tree.add_command(lp)
