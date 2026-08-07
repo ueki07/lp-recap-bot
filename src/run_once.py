@@ -53,7 +53,7 @@ PLAYERS_FILE = DATA_DIR / "players.json"
 STATE_FILE = DATA_DIR / "state.json"
 
 PREFIX = "!lp"
-DELAY_BETWEEN_PLAYERS = 0.4
+DELAY_BETWEEN_PLAYERS = 2.0
 
 HELP = (
     "**Commandes LP**\n"

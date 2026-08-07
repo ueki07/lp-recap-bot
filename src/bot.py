@@ -48,8 +48,9 @@ QUEUES = [QUEUE_SOLO, QUEUE_FLEX] if INCLUDE_FLEX else [QUEUE_SOLO]
 # marge après la borne de fin de fenêtre avant de publier.
 RECAP_DELAY_MINUTES = 5
 
-# Politesse : petite pause entre deux joueurs pour ne pas marteler u.gg.
-DELAY_BETWEEN_PLAYERS = 0.4
+# Politesse : pause entre deux joueurs. Trop court (0.4s), u.gg renvoie
+# des 500 en rafale sur une vingtaine de profils.
+DELAY_BETWEEN_PLAYERS = 2.0
 
 store = PlayerStore(DATA_FILE)
 ugg = UggClient()

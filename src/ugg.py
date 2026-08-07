@@ -13,6 +13,7 @@ Introspection activée, pratique pour explorer le schéma si ça bouge un jour.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -21,6 +22,11 @@ from curl_cffi import requests
 API_URL = "https://u.gg/api"
 IMPERSONATE = "chrome"
 TIMEOUT = 20
+
+# u.gg renvoie des 500 par intermittence quand on enchaîne les requêtes.
+MAX_RETRIES = 5
+RETRY_BACKOFF = 2.0  # secondes, doublé à chaque tentative (2, 4, 8, 16)
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 # Saison en cours. u.gg *exige* seasonIds (sans lui : `bad_params`).
 SEASON_ID = int(os.getenv("UGG_SEASON_ID", "26"))
@@ -119,37 +125,66 @@ class UggClient:
         self._session = requests.Session()
 
     def _post(self, query: str, variables: dict) -> dict:
-        try:
-            resp = self._session.post(
-                API_URL,
-                json={"query": query, "variables": variables},
-                impersonate=IMPERSONATE,
-                timeout=TIMEOUT,
-            )
-        except Exception as exc:  # réseau, TLS, timeout…
-            raise UggError(f"u.gg injoignable : {exc}") from exc
+        """Requête GraphQL, avec réessais sur les erreurs transitoires.
 
-        if resp.status_code == 403:
-            raise UggError(
-                "u.gg renvoie 403 (challenge Cloudflare). L'impersonation TLS "
-                "ne passe plus : mets curl_cffi à jour, ou essaie une autre "
-                "cible que 'chrome'."
-            )
-        if resp.status_code != 200:
-            raise UggError(f"u.gg a répondu {resp.status_code}")
+        Enchaîner une vingtaine de joueurs fait répondre 500 à u.gg de façon
+        intermittente : sans réessai, le récap quotidien perdrait silencieusement
+        des joueurs.
 
-        try:
-            payload = resp.json()
-        except Exception as exc:
-            raise UggError("réponse u.gg illisible (pas du JSON)") from exc
+        `player_info_not_found` est réessayé lui aussi, contre toute attente :
+        u.gg le renvoie parfois pour un compte qui existe (vérifié). Seules les
+        vraies erreurs de requête (`bad_params`) et le 403 Cloudflare échouent
+        immédiatement — elles ne guériront pas.
+        """
+        last_error: Exception | None = None
 
-        if payload.get("errors"):
-            message = payload["errors"][0].get("message", "erreur inconnue")
-            if message == "player_info_not_found":
-                raise PlayerNotFound(message)
-            raise UggError(message)
+        for attempt in range(MAX_RETRIES):
+            if attempt:
+                time.sleep(RETRY_BACKOFF * (2 ** (attempt - 1)))
 
-        return payload.get("data") or {}
+            try:
+                resp = self._session.post(
+                    API_URL,
+                    json={"query": query, "variables": variables},
+                    impersonate=IMPERSONATE,
+                    timeout=TIMEOUT,
+                )
+            except Exception as exc:  # réseau, TLS, timeout…
+                last_error = UggError(f"u.gg injoignable : {exc}")
+                continue
+
+            if resp.status_code == 403:
+                raise UggError(
+                    "u.gg renvoie 403 (challenge Cloudflare). L'impersonation TLS "
+                    "ne passe plus : mets curl_cffi à jour, ou essaie une autre "
+                    "cible que 'chrome'."
+                )
+            if resp.status_code in RETRYABLE_STATUS:
+                last_error = UggError(f"u.gg a répondu {resp.status_code}")
+                continue
+            if resp.status_code != 200:
+                raise UggError(f"u.gg a répondu {resp.status_code}")
+
+            try:
+                payload = resp.json()
+            except Exception as exc:
+                last_error = UggError("réponse u.gg illisible (pas du JSON)")
+                continue
+
+            if payload.get("errors"):
+                message = payload["errors"][0].get("message", "erreur inconnue")
+                if message == "player_info_not_found":
+                    # Contre-intuitif mais vérifié : u.gg renvoie parfois cette
+                    # erreur à tort quand il est sous charge, pour un compte qui
+                    # existe bel et bien. On réessaie donc avant de conclure —
+                    # sinon un joueur disparaît silencieusement du récap.
+                    last_error = PlayerNotFound(message)
+                    continue
+                raise UggError(message)
+
+            return payload.get("data") or {}
+
+        raise last_error or UggError("u.gg : échec après réessais")
 
     def fetch_ranks(self, name: str, tag: str, region: str) -> dict[str, RankScore]:
         """Rank actuel par file. Sert aussi à valider un Riot ID à l'ajout."""
