@@ -285,7 +285,11 @@ def process_commands(
 # Les embeds DPM.LOL portent le Riot ID complet dans `author.name`
 # (ex. « MY NAME IS TITUS#NBO »). C'est plus fiable que de parser l'URL
 # dpm.lol, où le séparateur `-` est ambigu quand le pseudo en contient un.
-_RIOT_ID_RE = re.compile(r"^\s*(?P<name>.+?)\s*#\s*(?P<tag>[A-Za-z0-9]{2,8})\s*$")
+#
+# Le tag accepte les espaces : `Miss Kitoko#KC W` est un Riot ID valide, vérifié
+# sur u.gg. Un motif alphanumérique strict écartait ces joueurs du moissonnage
+# en silence — ils n'apparaissaient jamais dans le récap sans qu'on sache pourquoi.
+_RIOT_ID_RE = re.compile(r"^\s*(?P<name>.+?)\s*#\s*(?P<tag>[^#]{2,16}?)\s*$")
 
 
 def harvest_riot_ids(discord: DiscordClient, channel_id: int, max_pages: int) -> dict:

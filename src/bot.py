@@ -328,7 +328,9 @@ async def lp_joueur(
     )
     if report.error:
         log.warning("fiche joueur KO pour %s : %s", player.riot_id, report.error)
-    await interaction.followup.send(embed=build_player_embed(report))
+    await interaction.followup.send(
+        embed=build_player_embed(report, show_queue_split=len(queues) > 1)
+    )
 
 
 tree.add_command(lp)

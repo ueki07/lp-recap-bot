@@ -204,7 +204,9 @@ def compute_player_period(
     return report
 
 
-def build_player_embed(report: PlayerPeriod) -> discord.Embed:
+def build_player_embed(
+    report: PlayerPeriod, show_queue_split: bool = False
+) -> discord.Embed:
     player = report.player
     if report.error:
         return discord.Embed(
@@ -229,7 +231,7 @@ def build_player_embed(report: PlayerPeriod) -> discord.Embed:
         return embed
 
     head = [f"**{report.lp:+d} LP** sur la période"]
-    if len(report.per_queue) > 1:
+    if show_queue_split and report.per_queue:
         head.append(" · ".join(f"{lbl} {val:+d}" for lbl, val in report.per_queue.items()))
     embed.description = "\n".join(head)
 
@@ -320,7 +322,10 @@ def build_embed(
                 f"{_mood(entry.lp)} `{entry.player.riot_id:<{width}}` "
                 f"**{entry.lp:+d} LP** · {record}"
             )
-            if show_queue_split and len(entry.per_queue) > 1:
+            # Afficher la file dès qu'on en suit plusieurs, même si le joueur
+            # n'en a joué qu'une : sinon un « +20 LP » de Flex est indiscernable
+            # d'un « +20 LP » de SoloQ.
+            if show_queue_split and entry.per_queue:
                 split = ", ".join(f"{lbl} {val:+d}" for lbl, val in entry.per_queue.items())
                 line += f" ({split})"
             if entry.unknown:
