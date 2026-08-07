@@ -1,3 +1,16 @@
 {
-  "players": []
+  "players": [
+    {
+      "name": "underground k1ng",
+      "tag": "VVS",
+      "region": "euw1",
+      "added_by": 0
+    },
+    {
+      "name": "MY NAME IS TITUS",
+      "tag": "NBO",
+      "region": "euw1",
+      "added_by": 0
+    }
+  ]
 }
