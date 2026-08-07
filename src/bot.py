@@ -19,6 +19,8 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
+from config import env_flag, env_int, env_str
+
 from recap import (
     PlayerRecap, build_embed, build_player_embed, compute_player_period,
     compute_recap, format_window, recap_window,
@@ -37,19 +39,19 @@ log = logging.getLogger("lp-recap")
 # .env pour le dev local ; en prod les variables viennent de l'hébergeur.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-TOKEN = os.getenv("DISCORD_TOKEN", "")
-GUILD_ID = int(os.getenv("GUILD_ID", "0"))
-RECAP_CHANNEL_ID = int(os.getenv("RECAP_CHANNEL_ID", "0"))
-RECAP_HOUR = int(os.getenv("RECAP_HOUR", "9"))
-TZ = ZoneInfo(os.getenv("TIMEZONE", "Europe/Paris"))
-DATA_FILE = Path(os.getenv("DATA_FILE", Path(__file__).resolve().parent.parent / "data" / "players.json"))
-INCLUDE_FLEX = os.getenv("INCLUDE_FLEX", "0") == "1"
+TOKEN = env_str("DISCORD_TOKEN")
+GUILD_ID = env_int("GUILD_ID")
+RECAP_CHANNEL_ID = env_int("RECAP_CHANNEL_ID")
+RECAP_HOUR = env_int("RECAP_HOUR", 9)
+TZ = ZoneInfo(env_str("TIMEZONE", "Europe/Paris"))
+DATA_FILE = Path(env_str("DATA_FILE", str(Path(__file__).resolve().parent.parent / "data" / "players.json")))
+INCLUDE_FLEX = env_flag("INCLUDE_FLEX")
 
 QUEUES = [QUEUE_SOLO, QUEUE_FLEX] if INCLUDE_FLEX else [QUEUE_SOLO]
 
 # u.gg ingère les games avec un peu de retard : on laisse quelques minutes de
 # marge après la borne de fin de fenêtre avant de publier.
-RECAP_DELAY_MINUTES = 5
+RECAP_DELAY_MINUTES = env_int("RECAP_DELAY_MINUTES", 5)
 
 # Politesse : pause entre deux joueurs. Trop court (0.4s), u.gg renvoie
 # des 500 en rafale sur une vingtaine de profils.

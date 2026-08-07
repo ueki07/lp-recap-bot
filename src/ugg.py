@@ -12,12 +12,13 @@ Introspection activée, pratique pour explorer le schéma si ça bouge un jour.
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from typing import Iterator
 
 from curl_cffi import requests
+
+from config import env_int
 
 API_URL = "https://u.gg/api"
 IMPERSONATE = "chrome"
@@ -29,7 +30,7 @@ RETRY_BACKOFF = 2.0  # secondes, doublé à chaque tentative (2, 4, 8, 16)
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 # Saison en cours. u.gg *exige* seasonIds (sans lui : `bad_params`).
-SEASON_ID = int(os.getenv("UGG_SEASON_ID", "26"))
+SEASON_ID = env_int("UGG_SEASON_ID", 26)
 
 QUEUE_SOLO = 420
 QUEUE_FLEX = 440

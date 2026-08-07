@@ -24,6 +24,8 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
+from config import env_flag, env_int, env_str
+
 from discord_api import DiscordClient, DiscordError
 from recap import build_embed, compute_recap, format_window, recap_window
 from store import (
@@ -39,16 +41,16 @@ log = logging.getLogger("lp-recap")
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
-TOKEN = os.getenv("DISCORD_TOKEN", "")
-COMMAND_CHANNEL_ID = int(os.getenv("COMMAND_CHANNEL_ID", "0") or 0)
-RECAP_CHANNEL_ID = int(os.getenv("RECAP_CHANNEL_ID", "0") or 0)
-RECAP_HOUR = int(os.getenv("RECAP_HOUR", "9"))
-RECAP_DELAY_MINUTES = int(os.getenv("RECAP_DELAY_MINUTES", "5"))
-TZ = ZoneInfo(os.getenv("TIMEZONE", "Europe/Paris"))
-INCLUDE_FLEX = os.getenv("INCLUDE_FLEX", "0") == "1"
+TOKEN = env_str("DISCORD_TOKEN")
+COMMAND_CHANNEL_ID = env_int("COMMAND_CHANNEL_ID")
+RECAP_CHANNEL_ID = env_int("RECAP_CHANNEL_ID")
+RECAP_HOUR = env_int("RECAP_HOUR", 9)
+RECAP_DELAY_MINUTES = env_int("RECAP_DELAY_MINUTES", 5)
+TZ = ZoneInfo(env_str("TIMEZONE", "Europe/Paris"))
+INCLUDE_FLEX = env_flag("INCLUDE_FLEX")
 QUEUES = [QUEUE_SOLO, QUEUE_FLEX] if INCLUDE_FLEX else [QUEUE_SOLO]
 
-DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
+DATA_DIR = Path(env_str("DATA_DIR", str(ROOT / "data")))
 PLAYERS_FILE = DATA_DIR / "players.json"
 STATE_FILE = DATA_DIR / "state.json"
 
