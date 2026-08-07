@@ -57,6 +57,12 @@ class Player:
         return f"https://u.gg/lol/profile/{self.region}/{slug}/overview"
 
 
+# Ponctuation qu'on retire en fin de tag. La correction automatique de macOS/iOS
+# ajoute volontiers un point : `Miss Kitoko#KC W.` était refusé comme introuvable,
+# sans le moindre indice sur la vraie cause. Aucun tag Riot ne finit par là.
+_TRAILING_PUNCT = ".,;:!?)»\"'"
+
+
 def parse_riot_id(raw: str) -> tuple[str, str]:
     """`Lordos#EUW` -> `("Lordos", "EUW")`. Lève ValueError si mal formé."""
     raw = raw.strip().lstrip("@")
@@ -66,7 +72,8 @@ def parse_riot_id(raw: str) -> tuple[str, str]:
             "(visible en haut de ton profil u.gg ou dans le client LoL)."
         )
     name, _, tag = raw.rpartition("#")
-    name, tag = name.strip(), tag.strip()
+    name = name.strip()
+    tag = tag.strip().rstrip(_TRAILING_PUNCT).strip()
     if not name or not tag:
         raise ValueError("Riot ID incomplet : il manque le pseudo ou le tag.")
     return name, tag
