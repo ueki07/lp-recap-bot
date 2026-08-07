@@ -1,9 +1,12 @@
 """Point d'entrée GitHub Actions : une passe, puis on sort.
 
-À chaque tick du cron, ce script :
-  1. lit les nouveaux messages du salon de commandes (REST, pas de gateway) ;
-  2. exécute les `!lp add|remove|list|recap` trouvés ;
-  3. publie le récap quotidien si l'heure est passée et qu'il ne l'a pas déjà fait.
+Publie le récap quotidien si l'heure est passée et qu'il ne l'a pas déjà fait.
+Sert aussi d'outil de moissonnage (`--harvest`).
+
+**Il n'y a volontairement aucune commande ici.** L'unique interface utilisateur
+est celle des slash commands `/lp` de `bot.py` : deux syntaxes concurrentes
+(`/lp` et `!lp`) créaient de la confusion pour rien. Actions ne fait donc que
+publier, et les commandes exigent que `bot.py` tourne.
 
 `data/players.json` et `data/state.json` sont réécrits puis commités par le
 workflow : c'est la persistance du bot, il n'y a pas de base de données.
@@ -14,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import re
 import sys
 import time as _time
@@ -28,9 +30,7 @@ from config import env_flag, env_int, env_str
 
 from discord_api import DiscordClient, DiscordError
 from recap import build_embed, compute_recap, format_window, recap_window
-from store import (
-    DEFAULT_REGION, REGIONS, Player, PlayerStore, parse_riot_id, region_label,
-)
+from store import DEFAULT_REGION, Player, PlayerStore, region_label
 from ugg import QUEUE_FLEX, QUEUE_SOLO, PlayerNotFound, UggClient, UggError
 
 logging.basicConfig(
@@ -54,16 +54,9 @@ DATA_DIR = Path(env_str("DATA_DIR", str(ROOT / "data")))
 PLAYERS_FILE = DATA_DIR / "players.json"
 STATE_FILE = DATA_DIR / "state.json"
 
-PREFIX = "!lp"
+# Politesse : pause entre deux joueurs. Trop court (0.4s), u.gg renvoie
+# des 500 en rafale sur une vingtaine de profils.
 DELAY_BETWEEN_PLAYERS = 2.0
-
-HELP = (
-    "**Commandes LP**\n"
-    "`!lp add Pseudo#TAG [region]` — suivre un profil (région : `euw1` par défaut)\n"
-    "`!lp remove Pseudo#TAG` — arrêter de le suivre\n"
-    "`!lp list` — profils suivis et leur rank\n"
-    "`!lp recap [n]` — récap à la demande (`n` = nombre de jours en arrière)\n"
-)
 
 
 # ─────────────────────────────────── état ───────────────────────────────────
@@ -83,87 +76,6 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-
-
-# ────────────────────────────────── commandes ──────────────────────────────────
-
-def split_riot_id_and_region(argument: str) -> tuple[str, str]:
-    """`underground k1ng#VVS euw1` -> `("underground k1ng#VVS", "euw1")`.
-
-    Le pseudo peut contenir des espaces : on ne peut donc pas se contenter de
-    découper sur l'espace. On regarde si le dernier mot est une région connue.
-    """
-    parts = argument.strip().split()
-    if len(parts) >= 2 and parts[-1].lower() in REGIONS:
-        return " ".join(parts[:-1]), parts[-1].lower()
-    return argument.strip(), DEFAULT_REGION
-
-
-def cmd_add(store: PlayerStore, ugg: UggClient, argument: str) -> str:
-    if not argument.strip():
-        return "❌ Il manque le Riot ID. Ex : `!lp add Lordos#EUW`"
-
-    raw_id, region = split_riot_id_and_region(argument)
-    try:
-        name, tag = parse_riot_id(raw_id)
-    except ValueError as exc:
-        return f"❌ {exc}"
-
-    player = Player(name=name, tag=tag, region=region)
-    if store.find(player.key):
-        return f"ℹ️ `{player.riot_id}` est déjà suivi."
-
-    # Validation auprès de u.gg avant enregistrement : évite de traîner des
-    # profils fantômes qui feraient échouer le récap tous les jours.
-    try:
-        ranks = ugg.fetch_ranks(name, tag, region)
-    except PlayerNotFound:
-        return (
-            f"❌ `{player.riot_id}` introuvable sur u.gg en **{region_label(region)}**.\n"
-            "Vérifie le tag et la région."
-        )
-    except UggError as exc:
-        return f"⚠️ u.gg ne répond pas : {exc}"
-
-    store.add_sync(player)
-    solo = ranks.get("ranked_solo_5x5")
-    rank_line = solo.short() if solo else "non classé en SoloQ"
-    return (
-        f"✅ `{player.riot_id}` ({region_label(region)}) ajouté — {rank_line}\n"
-        f"**{len(store.all())}** profil(s) suivi(s)"
-    )
-
-
-def cmd_remove(store: PlayerStore, argument: str) -> str:
-    if not argument.strip():
-        return "❌ Il manque le Riot ID. Ex : `!lp remove Lordos#EUW`"
-    removed = store.remove_sync(argument.strip())
-    if removed is None:
-        return f"❌ `{argument.strip()}` n'était pas suivi. Voir `!lp list`."
-    return f"🗑️ `{removed.riot_id}` retiré. **{len(store.all())}** restant(s)."
-
-
-def cmd_list(store: PlayerStore, ugg: UggClient) -> str:
-    players = store.all()
-    if not players:
-        return "Aucun profil suivi. Ajoute-en un avec `!lp add Pseudo#TAG`."
-
-    rows = []
-    for index, player in enumerate(players):
-        if index:
-            _time.sleep(DELAY_BETWEEN_PLAYERS)
-        try:
-            scores = ugg.fetch_ranks(player.name, player.tag, player.region)
-            solo = scores.get("ranked_solo_5x5")
-            rows.append((player, solo.short() if solo else "unranked"))
-        except UggError:
-            rows.append((player, "⚠️ indisponible"))
-
-    width = max(len(p.riot_id) for p, _ in rows)
-    body = "\n".join(
-        f"`{p.riot_id:<{width}}`  {rank}  ·  {region_label(p.region)}" for p, rank in rows
-    )
-    return f"📋 **Profils suivis ({len(rows)})**\n{body}"
 
 
 def compute_recaps(ugg: UggClient, players: list[Player], start: datetime, end: datetime):
@@ -191,93 +103,6 @@ def build_recap_payload(store: PlayerStore, ugg: UggClient, offset_days: int = 0
         if entry.error:
             log.warning("récap KO pour %s : %s", entry.player.riot_id, entry.error)
     return build_embed(recaps, start, end, show_queue_split=INCLUDE_FLEX), start, end
-
-
-def handle_command(
-    store: PlayerStore, ugg: UggClient, discord: DiscordClient, message: dict
-) -> None:
-    content = (message.get("content") or "").strip()
-    body = content[len(PREFIX):].strip()
-    verb, _, argument = body.partition(" ")
-    verb = verb.lower()
-    channel_id = int(message["channel_id"])
-    message_id = int(message["id"])
-    author = (message.get("author") or {}).get("username", "?")
-
-    log.info("commande de %s : %s", author, content)
-
-    if verb in ("add", "ajoute", "+"):
-        reply = cmd_add(store, ugg, argument)
-    elif verb in ("remove", "rm", "delete", "-"):
-        reply = cmd_remove(store, argument)
-    elif verb in ("list", "ls", "liste"):
-        reply = cmd_list(store, ugg)
-    elif verb == "recap":
-        try:
-            offset = int(argument.strip() or 0)
-        except ValueError:
-            offset = 0
-        offset = max(0, min(offset, 30))
-        embed, start, end = build_recap_payload(store, ugg, offset)
-        if embed is None:
-            discord.send_message(
-                channel_id,
-                content=f"Aucun profil suivi ({format_window(start, end)}).",
-                reply_to=message_id,
-            )
-        else:
-            discord.send_message(channel_id, embed=embed.to_dict(), reply_to=message_id)
-        discord.add_reaction(channel_id, message_id, "✅")
-        return
-    elif verb in ("help", "aide", ""):
-        reply = HELP
-    else:
-        reply = f"❓ Commande inconnue : `{verb}`\n\n{HELP}"
-
-    discord.send_message(channel_id, content=reply, reply_to=message_id)
-    discord.add_reaction(channel_id, message_id, "✅")
-
-
-def process_commands(
-    store: PlayerStore, ugg: UggClient, discord: DiscordClient, state: dict
-) -> None:
-    if not COMMAND_CHANNEL_ID:
-        return
-
-    after = state.get("last_message_id")
-    messages = discord.get_messages(COMMAND_CHANNEL_ID, after=after)
-    if not messages:
-        return
-
-    # Premier lancement : on mémorise juste le point de départ, sans rejouer
-    # tout l'historique du salon.
-    if after is None:
-        state["last_message_id"] = messages[-1]["id"]
-        log.info("initialisation : curseur posé sur le message %s", messages[-1]["id"])
-        return
-
-    blind = 0
-    for message in messages:
-        state["last_message_id"] = message["id"]
-        if (message.get("author") or {}).get("bot"):
-            continue
-        content = (message.get("content") or "").strip()
-        if not content:
-            blind += 1
-            continue
-        if not content.lower().startswith(PREFIX):
-            continue
-        try:
-            handle_command(store, ugg, discord, message)
-        except Exception:
-            log.exception("commande en échec : %s", content)
-
-    if blind and blind == len([m for m in messages if not (m.get("author") or {}).get("bot")]):
-        log.error(
-            "Tous les messages lus ont un contenu vide : l'intent MESSAGE CONTENT "
-            "n'est probablement pas activé. Developer Portal > ton application > "
-            "Bot > Privileged Gateway Intents > Message Content Intent."
-        )
 
 
 # ──────────────────────── moissonnage de l'historique ────────────────────────
@@ -385,8 +210,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Une passe du bot LP recap.")
     parser.add_argument("--force-recap", action="store_true",
                         help="publier le récap même s'il l'a déjà été")
-    parser.add_argument("--no-commands", action="store_true",
-                        help="ignorer les commandes, ne faire que le récap")
     parser.add_argument("--dry-run", action="store_true",
                         help="afficher le récap dans la console sans rien envoyer")
     parser.add_argument("--harvest", action="store_true",
@@ -427,8 +250,6 @@ def main() -> int:
         return run_harvest(store, ugg, discord, source, args.harvest_pages, DEFAULT_REGION)
 
     try:
-        if not args.no_commands:
-            process_commands(store, ugg, discord, state)
         maybe_post_recap(store, ugg, discord, state, force=args.force_recap)
     except DiscordError as exc:
         log.error("Discord : %s", exc)

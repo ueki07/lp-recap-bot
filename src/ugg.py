@@ -168,7 +168,7 @@ class UggClient:
 
             try:
                 payload = resp.json()
-            except Exception as exc:
+            except Exception:
                 last_error = UggError("réponse u.gg illisible (pas du JSON)")
                 continue
 

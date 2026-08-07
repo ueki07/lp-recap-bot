@@ -21,15 +21,23 @@ Le cœur (u.gg, calcul, stockage) est partagé ; seule la façade change.
 
 | | **GitHub Actions** (`src/run_once.py`) | **Bot permanent** (`src/bot.py`) |
 |---|---|---|
+| Rôle | publie le récap quotidien | commandes `/lp` + récap |
 | Hébergement | aucun | un process 24/7 |
-| Coût | gratuit (repo public = minutes illimitées) | VPS / Railway / Raspberry Pi |
-| Commandes | texte : `!lp add Pseudo#TAG` | slash : `/lp add`, avec autocomplétion |
-| Latence commande | jusqu'à ~5-15 min (cron) | instantanée |
+| Coût | gratuit (repo public = minutes illimitées) | VPS / Oracle Cloud / Raspberry Pi |
+| Commandes | **aucune** | slash : `/lp`, avec autocomplétion |
 
-**Pourquoi pas de slash commands sur Actions** : elles exigent une connexion
-gateway ouverte en permanence, or un job Actions est plafonné à 6 h. C'est
-structurellement incompatible. Le mode Actions lit donc les commandes par
-requêtes REST à chaque tick du cron — pas de websocket, pas de serveur.
+**Une seule interface utilisateur : les slash commands `/lp`.** Elles exigent une
+connexion gateway permanente, donc elles ne fonctionnent que si `bot.py` tourne.
+Actions ne sait pas les servir (un job y est plafonné à 6 h) : son rôle se limite
+à publier le récap quotidien, de façon fiable et sans machine allumée.
+
+Une couche de commandes texte `!lp` a existé côté Actions ; elle a été retirée.
+Deux syntaxes concurrentes pour les mêmes actions créaient de la confusion, et la
+latence du cron (jusqu'à une heure en pratique, GitHub throttlant les workflows
+planifiés) les rendait pénibles à l'usage.
+
+**Faire tourner les deux ensemble** : lancer `bot.py` avec `RECAP_ENABLED=0`,
+sinon le récap est publié deux fois.
 
 ---
 
@@ -41,11 +49,9 @@ Sur [discord.com/developers/applications](https://discord.com/developers/applica
 *New Application* → onglet **Bot** :
 
 - *Reset Token* → copier le token.
-- **Activer `MESSAGE CONTENT INTENT`** (section *Privileged Gateway Intents*).
-  Sans lui, Discord renvoie un `content` vide et le bot ne verra jamais les
-  commandes. En dessous de 100 serveurs, c'est une simple case à cocher, aucune
-  vérification n'est demandée. Le bot le détecte et le dit dans les logs si tu
-  oublies.
+- **`MESSAGE CONTENT INTENT`** n'est plus nécessaire depuis le retrait des
+  commandes texte : les slash commands n'en ont pas besoin. Le moissonnage lit
+  des embeds, pas du contenu de message.
 
 Puis *OAuth2 > URL Generator* pour l'inviter :
 - Scopes : `bot`
@@ -65,8 +71,9 @@ minutes illimitées**. Avec un cron toutes les 5 min, il faut être public.
 
 *Settings > Secrets and variables > Actions* :
 
-**Secrets** — `DISCORD_TOKEN`, `RECAP_CHANNEL_ID`, `COMMAND_CHANNEL_ID`
-(les deux salons peuvent être le même).
+**Secrets** — `DISCORD_TOKEN`, `RECAP_CHANNEL_ID`. `COMMAND_CHANNEL_ID` ne sert
+plus qu'au moissonnage (`--harvest`) ; sans lui, c'est `RECAP_CHANNEL_ID` qui est
+scanné.
 
 **Variables** (facultatif) — `RECAP_HOUR`, `TIMEZONE`, `INCLUDE_FLEX`,
 `UGG_SEASON_ID`.
@@ -74,19 +81,6 @@ minutes illimitées**. Avec un cron toutes les 5 min, il faut être public.
 C'est tout. Le workflow tourne toutes les 5 min et se déclenche aussi à la main
 via *Actions > LP recap > Run workflow*.
 
-### Commandes
-
-```
-!lp add Pseudo#TAG [region]   suivre un profil (euw1 par défaut)
-!lp remove Pseudo#TAG          arrêter de le suivre
-!lp list                       profils suivis + rank actuel
-!lp recap [n]                  récap à la demande (n jours en arrière)
-!lp help
-```
-
-Le bot réagit ✅ au message une fois la commande traitée. `!lp add` valide le
-profil auprès de u.gg avant de l'enregistrer : un tag ou une région faux sont
-refusés tout de suite.
 
 ---
 
@@ -143,8 +137,9 @@ autre cible d'impersonation (`chrome124`, `safari`…).
 |---|---|---|
 | `DISCORD_TOKEN` | — | **Requis.** Token du bot. |
 | `RECAP_CHANNEL_ID` | — | **Requis.** Salon où publier le récap. |
-| `COMMAND_CHANNEL_ID` | — | Salon où lire les `!lp ...` (mode Actions). |
+| `COMMAND_CHANNEL_ID` | — | Salon scanné par `--harvest` (défaut : `RECAP_CHANNEL_ID`). |
 | `GUILD_ID` | — | Synchro instantanée des slash commands (mode bot). |
+| `RECAP_ENABLED` | `1` | `0` pour désactiver le récap (bot lancé à côté d'Actions). |
 | `RECAP_HOUR` | `9` | Borne de la fenêtre. Récap publié à `RECAP_HOUR:05`. |
 | `RECAP_DELAY_MINUTES` | `5` | Marge après la borne avant publication. |
 | `TIMEZONE` | `Europe/Paris` | Fuseau des bornes (gère l'heure d'été seul). |
@@ -165,10 +160,10 @@ réglage à ne pas oublier.
 en cours. Publication à 9h05 pour laisser à u.gg le temps d'ingérer les
 dernières games.
 
-**Idempotence.** Le cron tourne toutes les 5 min mais le récap n'est publié
-qu'une fois : `data/state.json` mémorise la fenêtre déjà traitée. Même chose
-pour les commandes, via le curseur `last_message_id` — au premier lancement, le
-bot pose le curseur sans rejouer l'historique du salon.
+**Idempotence.** Le récap n'est publié qu'une fois par fenêtre :
+`data/state.json` mémorise celle déjà traitée. Le cron est déclaré toutes les
+5 min mais GitHub throttle les workflows planifiés — en pratique il tourne plutôt
+une fois par heure, et le récap du matin peut donc arriver avec du retard.
 
 **LP inconnu.** Quand u.gg n'arrive pas à déduire le delta d'une game (le `? LP`
 affiché sur le site), il renvoie une valeur sentinelle aberrante (`-9991`
