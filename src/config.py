@@ -35,3 +35,16 @@ def env_flag(name: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw in ("1", "true", "yes", "on", "oui")
+
+
+def env_hour(name: str, default: int) -> int:
+    """Heure 0-23 depuis l'environnement.
+
+    Hors plage -> `default`. Sans ça, une valeur aberrante fait lever
+    `ValueError: hour must be in 0..23` à l'import (le décorateur
+    `tasks.loop(time=...)` est évalué au chargement du module), donc un crash
+    avant même la connexion à Discord. Pour désactiver le récap, il y a
+    `RECAP_ENABLED=0` — pas une heure impossible.
+    """
+    value = env_int(name, default)
+    return value if 0 <= value <= 23 else default

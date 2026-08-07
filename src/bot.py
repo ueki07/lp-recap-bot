@@ -19,7 +19,7 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
-from config import env_flag, env_int, env_str
+from config import env_flag, env_hour, env_int, env_str
 
 from recap import (
     PlayerRecap, build_embed, build_player_embed, compute_player_period,
@@ -42,7 +42,10 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 TOKEN = env_str("DISCORD_TOKEN")
 GUILD_ID = env_int("GUILD_ID")
 RECAP_CHANNEL_ID = env_int("RECAP_CHANNEL_ID")
-RECAP_HOUR = env_int("RECAP_HOUR", 9)
+RECAP_HOUR = env_hour("RECAP_HOUR", 9)
+# À mettre à 0 pour lancer le bot en parallèle du cron GitHub Actions :
+# les slash commands restent dispo, mais le récap n'est pas publié deux fois.
+RECAP_ENABLED = env_flag("RECAP_ENABLED", True)
 TZ = ZoneInfo(env_str("TIMEZONE", "Europe/Paris"))
 DATA_FILE = Path(env_str("DATA_FILE", str(Path(__file__).resolve().parent.parent / "data" / "players.json")))
 INCLUDE_FLEX = env_flag("INCLUDE_FLEX")
@@ -376,7 +379,9 @@ async def on_ready() -> None:
         await tree.sync()  # sync global : jusqu'à 1 h de propagation
         log.info("commandes synchronisées globalement")
 
-    if not daily_recap.is_running():
+    if not RECAP_ENABLED:
+        log.info("récap quotidien DÉSACTIVÉ (RECAP_ENABLED=0) — slash commands seules")
+    elif not daily_recap.is_running():
         daily_recap.start()
         log.info(
             "récap quotidien planifié à %02dh%02d (%s), fenêtre %dh -> %dh",
